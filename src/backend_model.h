@@ -212,6 +212,8 @@ class TritonModel : public Model {
   // effective until committed.
   std::vector<std::shared_ptr<TritonModelInstance>> bg_instances_;
   std::vector<std::shared_ptr<TritonModelInstance>> bg_passive_instances_;
+  // Protect concurrent update of bg instances
+  mutable std::mutex bg_mtx_;
 
   // Opaque state associated with this model.
   void* state_;

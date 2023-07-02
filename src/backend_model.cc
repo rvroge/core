@@ -275,6 +275,7 @@ TritonModel::UpdateInstanceGroup(
   caller_lock->lock();
   if (!status.IsOk()) {
     // Remove any pending instances if created.
+    std::lock_guard<std::mutex> lk(bg_mtx_);
     bg_instances_.clear();
     bg_passive_instances_.clear();
     return status;
@@ -397,6 +398,7 @@ Status
 TritonModel::RegisterInstance(
     std::shared_ptr<TritonModelInstance>&& instance, const bool passive)
 {
+  std::lock_guard<std::mutex> lk(bg_mtx_);
   if (passive) {
     bg_passive_instances_.emplace_back(std::move(instance));
   } else {
@@ -409,11 +411,14 @@ TritonModel::RegisterInstance(
 Status
 TritonModel::CommitInstances()
 {
+  // TODO: Might not need to protect bg/passive instances here in current code
+  // since CommitInstances() may only be called serially after concurrent
+  // operations (like RegisterInstance) finish.
+  std::lock_guard<std::mutex> lk(bg_mtx_);
   instances_.swap(bg_instances_);
   passive_instances_.swap(bg_passive_instances_);
   bg_instances_.clear();
   bg_passive_instances_.clear();
-
   return Status::Success;
 }
 
@@ -423,6 +428,7 @@ TritonModel::GetInstancesByDevice(int32_t device_id) const
   std::vector<std::shared_ptr<TritonModelInstance>> result;
   // Do not match passive instances, as they do not have a backend thread.
   // Do not match foreground instances, as backend threads cannot be updated.
+  std::lock_guard<std::mutex> lk(bg_mtx_);
   for (auto& instance : bg_instances_) {
     if (instance->DeviceId() == device_id) {
       result.push_back(instance);
@@ -633,11 +639,13 @@ TritonModel::~TritonModel()
   // the model itself.
   instances_.clear();
   passive_instances_.clear();
-  bg_instances_.clear();
-  bg_passive_instances_.clear();
-
+  {
+    std::lock_guard<std::mutex> lk(bg_mtx_);
+    bg_instances_.clear();
+    bg_passive_instances_.clear();
+  }
   // Unregister itself from the rate limiter. Note this should happen
-  // after all instances are destructed. Destrucing instances ensures
+  // after all instances are destructed. Destructing instances ensures
   // there are no instance threads waiting on rate limiter for
   // receiving their payloads.
   server_->GetRateLimiter()->UnregisterModel(this);
